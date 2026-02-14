@@ -31,7 +31,7 @@
 #ifdef __WIIU__
 extern int disable_gamepad;
 extern int swap_buttons;
-extern int absolute_positioning;
+extern mouse_modes mouse_mode;
 extern int autostream;
 
 extern ssize_t getline(char **buf, size_t *bufsiz, FILE *fp);
@@ -83,7 +83,7 @@ static struct option long_options[] = {
   {"disable_gamepad", no_argument, NULL, 'A'},
   {"swap_buttons", no_argument, NULL, 'B'},
   {"autostream", no_argument, NULL, 'C'},
-  {"absolute_positioning", no_argument, NULL, 'D'},
+  {"mouse_mode", required_argument, NULL, 'D'},
 #endif
   {"nomouseemulation", no_argument, NULL, '4'},
   {"pin", required_argument, NULL, '5'},
@@ -275,7 +275,12 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     autostream = true;
     break;
   case 'D':
-    absolute_positioning = true;
+    if (strcasecmp(value, "relative") == 0)
+      mouse_mode = MOUSE_MODE_RELATIVE;
+    else if (strcasecmp(value, "absolute") == 0)
+      mouse_mode = MOUSE_MODE_ABSOLUTE;
+    else if (strcasecmp(value, "touchscreen") == 0)
+      mouse_mode = MOUSE_MODE_TOUCHSCREEN;
     break;
 #endif
   case '4':
