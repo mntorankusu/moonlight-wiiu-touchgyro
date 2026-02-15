@@ -1,13 +1,16 @@
 #include "wiiu.h"
-
+#include "Limelight.h"
+#include <nn/acp/drcled_c.h>
 #include <malloc.h>
-
+#include <string.h>
 #include <vpad/input.h>
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <coreinit/time.h>
 #include <coreinit/alarm.h>
 #include <coreinit/thread.h>
+#include <nn/acp/drcled_c.h>
+#include <nn/act/client_cpp.h>
 
 #define millis() OSTicksToMilliseconds(OSGetTime())
 
@@ -15,11 +18,22 @@ int disable_gamepad = 0;
 int swap_buttons = 0;
 int absolute_positioning = 0;
 
+int touch_output = 0;
+int gyro_output = 0;
+
 static char lastTouched = 0;
 static char touched = 0;
+static int rumble_weak = 0;
+static int rumble_strong = 0;
 
+uint8_t rumblepattern1[32] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+uint8_t rumblepattern2[32] = { 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00};
+uint8_t rumblepattern3[12] = { 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 static uint16_t last_x = 0;
 static uint16_t last_y = 0;
+
+static uint8_t batteryLevel = 255;
+static uint8_t lastBatteryLevel = 0;
 
 #define TAP_MILLIS 100
 #define DRAG_DISTANCE 10
@@ -33,10 +47,60 @@ static OSThread inputThread;
 static OSAlarm inputAlarm;
 
 // ~60 Hz
-#define INPUT_UPDATE_RATE OSMillisecondsToTicks(16)
+#define INPUT_UPDATE_RATE OSMillisecondsToTicks(8)
+
+void handleRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, unsigned short highFreqMotor) {
+  if (controllerNumber == 0) {
+    if (lowFreqMotor < 1 && highFreqMotor > 1) {
+      rumble_weak = 1;
+      rumble_strong = 0;
+      }
+    else if (lowFreqMotor > 1) {
+      rumble_weak = 0;
+      rumble_strong = 1;
+      } else
+      {
+      VPADStopMotor(VPAD_CHAN_0);
+      rumble_weak = 0;
+      rumble_strong = 0;
+      }
+    }
+}
+
+void handleMotion (VPADVec3D gyro, VPADVec3D accel) {
+  if (gyro_output) {
+    VPADSetGyroMagnification(VPAD_CHAN_0, 100,100,100);
+    LiSendControllerMotionEvent(0, LI_MOTION_TYPE_GYRO, -gyro.x, gyro.y, gyro.z);
+    LiSendControllerMotionEvent(0, LI_MOTION_TYPE_ACCEL, accel.x, accel.y, accel.z);
+  }
+}
 
 void handleTouch(VPADTouchData touch) {
-  if (absolute_positioning) {
+  /*if (hoverbaby){
+    if (touch.touched){
+      touched = 1;
+      LiSendTouchEvent(LI_TOUCH_EVENT_HOVER, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+    }
+    else if(!touch.touched && touched){
+      touched = 0;
+      LiSendTouchEvent(LI_TOUCH_EVENT_HOVER_LEAVE, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+    }
+  }
+  else */
+  if (touch_output) {
+    if (touch.touched && !touched){
+      touched = 1;
+      LiSendTouchEvent(LI_TOUCH_EVENT_DOWN, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+    }
+    else if(touch.touched && touched){
+      LiSendTouchEvent(LI_TOUCH_EVENT_MOVE, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+    }
+    else if(!touch.touched && touched){
+      touched = 0;
+      LiSendTouchEvent(LI_TOUCH_EVENT_UP, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+    }
+  }
+  else if (absolute_positioning) {
     if (touch.touched) {
       LiSendMousePositionEvent(touch.x, touch.y, TOUCH_WIDTH, TOUCH_HEIGHT);
 
@@ -96,8 +160,11 @@ void wiiu_input_init(void)
 {
 	KPADInit();
 	WPADEnableURCC(1);
+  if (!disable_gamepad) {
+    
+  }
 }
-
+int arrival_set = 0;
 void wiiu_input_update(void) {
   static uint64_t home_pressed[4] = {0};
 
@@ -111,6 +178,24 @@ void wiiu_input_update(void) {
   VPADReadError err;
   VPADRead(VPAD_CHAN_0, &vpad, 1, &err);
   if (err == VPAD_READ_SUCCESS && !disable_gamepad) {
+    if (!arrival_set) {
+      LiSendControllerArrivalEvent(0,gamepad_mask,LI_CTYPE_NINTENDO,0x1FFFFF,LI_CCAP_RUMBLE | LI_CCAP_GYRO | LI_CCAP_BATTERY_STATE | LI_CCAP_RGB_LED);
+      arrival_set = 1;
+    }
+    if (rumble_strong) {
+      VPADControlMotor(VPAD_CHAN_0, rumblepattern3, 8);
+    } else if (rumble_weak) {
+      VPADControlMotor(VPAD_CHAN_0, rumblepattern3, 10);
+    } else {
+      VPADStopMotor(VPAD_CHAN_0);
+    }
+
+    batteryLevel = vpad.battery;
+    if (batteryLevel != lastBatteryLevel) {
+      LiSendControllerBatteryEvent(0, LI_BATTERY_STATE_UNKNOWN, batteryLevel);
+      lastBatteryLevel = batteryLevel;
+    }
+
     uint32_t btns = vpad.hold;
     short buttonFlags = 0;
 #define CHECKBTN(v, f) if (btns & v) buttonFlags |= f;
@@ -137,12 +222,13 @@ void wiiu_input_update(void) {
     CHECKBTN(VPAD_BUTTON_PLUS,    PLAY_FLAG);
     CHECKBTN(VPAD_BUTTON_MINUS,   BACK_FLAG);
     CHECKBTN(VPAD_BUTTON_HOME,    SPECIAL_FLAG);
+    CHECKBTN(VPAD_BUTTON_TV,      MISC_FLAG);
 #undef CHECKBTN
 
     // If the button was just pressed, reset to current time
     if (vpad.trigger & VPAD_BUTTON_HOME) home_pressed[controllerNumber] = millis();
 
-    if (btns & VPAD_BUTTON_HOME && millis() - home_pressed[controllerNumber] > 3000) {
+    if (btns & VPAD_BUTTON_HOME && millis() - home_pressed[controllerNumber] > 300) {
       state = STATE_STOP_STREAM;
       return;
     }
@@ -155,6 +241,7 @@ void wiiu_input_update(void) {
 
     VPADTouchData touch;
     VPADGetTPCalibratedPoint(VPAD_CHAN_0, &touch, &vpad.tpNormal);
+    handleMotion(vpad.gyro, vpad.accelerometer);
     handleTouch(touch);
   }
 

@@ -32,6 +32,8 @@
 extern int disable_gamepad;
 extern int swap_buttons;
 extern int absolute_positioning;
+extern int touch_output;
+extern int gyro_output;
 extern int autostream;
 
 extern ssize_t getline(char **buf, size_t *bufsiz, FILE *fp);
@@ -84,6 +86,8 @@ static struct option long_options[] = {
   {"swap_buttons", no_argument, NULL, 'B'},
   {"autostream", no_argument, NULL, 'C'},
   {"absolute_positioning", no_argument, NULL, 'D'},
+  {"touch_output", no_argument, NULL, 'E'},
+  {"gyro_output", no_argument, NULL, 'F'},
 #endif
   {"nomouseemulation", no_argument, NULL, '4'},
   {"pin", required_argument, NULL, '5'},
@@ -276,6 +280,12 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     break;
   case 'D':
     absolute_positioning = true;
+    break;
+  case 'E':
+    touch_output = true;
+    break;
+  case 'F':
+    gyro_output = true;
     break;
 #endif
   case '4':

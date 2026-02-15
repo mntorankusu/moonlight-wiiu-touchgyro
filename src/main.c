@@ -58,6 +58,8 @@ char message_buffer[1024] = "\0";
 
 int autostream = 0;
 
+void handleRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, unsigned short highFreqMotor);
+
 static int get_app_id(GS_CLIENT client, PSERVER_DATA server, const char *name) {
   PAPP_LIST list = NULL;
   if (gs_applist(client, server, &list) != GS_OK) {
@@ -137,6 +139,10 @@ int main(int argc, char* argv[]) {
   wiiu_net_init();
 
   wiiu_input_init();
+  extern ConnListenerRumble rumble_handler;
+
+  rumble_handler = handleRumble;
+
 
   Font_Init();
 
@@ -144,7 +150,7 @@ int main(int argc, char* argv[]) {
   Font_SetColor(255, 255, 255, 255);
   Font_Print(8, 58, "Reading configuration...");
   Font_Draw_TVDRC();
-
+  
   CONFIGURATION config;
   config_parse(argc, argv, &config);
 
