@@ -9,7 +9,6 @@
 #include <coreinit/time.h>
 #include <coreinit/alarm.h>
 #include <coreinit/thread.h>
-#include <nn/acp/drcled_c.h>
 #include <nn/act/client_cpp.h>
 
 #define millis() OSTicksToMilliseconds(OSGetTime())
@@ -20,15 +19,19 @@ int absolute_positioning = 0;
 
 int touch_output = 0;
 int gyro_output = 0;
+int gyro_magnification = 1;
+int power_button_key = 80;
+
+float input_update_rate = 32.0f;
 
 static char lastTouched = 0;
 static char touched = 0;
 static int rumble_weak = 0;
 static int rumble_strong = 0;
+static uint32_t power_button_pressed = 0;
 
-uint8_t rumblepattern1[32] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-uint8_t rumblepattern2[32] = { 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00};
-uint8_t rumblepattern3[12] = { 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+uint8_t rumblepattern1[12] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+uint8_t rumblepattern2[12] = { 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 static uint16_t last_x = 0;
 static uint16_t last_y = 0;
 
@@ -39,15 +42,33 @@ static uint8_t lastBatteryLevel = 0;
 #define DRAG_DISTANCE 10
 static uint64_t touchDownMillis = 0;
 
-#define TOUCH_WIDTH 1280
-#define TOUCH_HEIGHT 720
+#define TOUCH_WIDTH 1920.0f
+#define TOUCH_HEIGHT 1080.0f
+#define VPAD_BUTTON_POWER 0x00080000
 
 static int thread_running;
 static OSThread inputThread;
 static OSAlarm inputAlarm;
 
-// ~60 Hz
-#define INPUT_UPDATE_RATE OSMillisecondsToTicks(8)
+//Lower numbers mean lower latency, but there may be an impact on performance. 4ms is 250hz, so it's unlikely that any lower value will help much.
+#define INPUT_UPDATE_RATE OSMillisecondsToTicks(input_update_rate)
+
+uint32_t handleAdditionalKeys(uint32_t buttons) {
+  static uint32_t status = 0;
+  static uint32_t tick = 0;
+  
+  VPADBASEGetPowerButtonPressStatus(VPAD_CHAN_0,&tick,&status);
+  if (status) {
+    buttons |= VPAD_BUTTON_POWER;
+    LiSendKeyboardEvent(power_button_key, KEY_ACTION_DOWN, 0);
+    power_button_pressed = 1;
+  } else if (!status) {
+    LiSendKeyboardEvent(power_button_key, KEY_ACTION_UP, 0);
+    power_button_pressed = 0;
+  }
+
+  return buttons;
+}
 
 void handleRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, unsigned short highFreqMotor) {
   if (controllerNumber == 0) {
@@ -69,35 +90,24 @@ void handleRumble(unsigned short controllerNumber, unsigned short lowFreqMotor, 
 
 void handleMotion (VPADVec3D gyro, VPADVec3D accel) {
   if (gyro_output) {
-    VPADSetGyroMagnification(VPAD_CHAN_0, 100,100,100);
+    VPADSetGyroMagnification(VPAD_CHAN_0, 57.2958*gyro_magnification,57.2958*gyro_magnification,57.2958*gyro_magnification); // Convert from radians to degrees
     LiSendControllerMotionEvent(0, LI_MOTION_TYPE_GYRO, -gyro.x, gyro.y, gyro.z);
-    LiSendControllerMotionEvent(0, LI_MOTION_TYPE_ACCEL, accel.x, accel.y, accel.z);
+    //LiSendControllerMotionEvent(0, LI_MOTION_TYPE_ACCEL, -accel.x, accel.y, accel.z);
   }
 }
 
 void handleTouch(VPADTouchData touch) {
-  /*if (hoverbaby){
-    if (touch.touched){
-      touched = 1;
-      LiSendTouchEvent(LI_TOUCH_EVENT_HOVER, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
-    }
-    else if(!touch.touched && touched){
-      touched = 0;
-      LiSendTouchEvent(LI_TOUCH_EVENT_HOVER_LEAVE, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
-    }
-  }
-  else */
   if (touch_output) {
     if (touch.touched && !touched){
       touched = 1;
-      LiSendTouchEvent(LI_TOUCH_EVENT_DOWN, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+      LiSendTouchEvent(LI_TOUCH_EVENT_DOWN, 22, (float)touch.x/TOUCH_WIDTH, (float)touch.y/TOUCH_HEIGHT, 0, 0, 0, 0);
     }
     else if(touch.touched && touched){
-      LiSendTouchEvent(LI_TOUCH_EVENT_MOVE, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+      LiSendTouchEvent(LI_TOUCH_EVENT_MOVE, 22, (float)touch.x/TOUCH_WIDTH, (float)touch.y/TOUCH_HEIGHT, 0, 0, 0, 0);
     }
     else if(!touch.touched && touched){
       touched = 0;
-      LiSendTouchEvent(LI_TOUCH_EVENT_UP, 22, touch.x/1280.0f, touch.y/720.0f, 0, 0, 0, 0);
+      LiSendTouchEvent(LI_TOUCH_EVENT_UP, 22, (float)touch.x/TOUCH_WIDTH, (float)touch.y/TOUCH_HEIGHT, 0, 0, 0, 0);
     }
   }
   else if (absolute_positioning) {
@@ -161,7 +171,7 @@ void wiiu_input_init(void)
 	KPADInit();
 	WPADEnableURCC(1);
   if (!disable_gamepad) {
-    
+    VPADInitGyroZeroDriftMode(VPAD_CHAN_0);
   }
 }
 int arrival_set = 0;
@@ -179,25 +189,28 @@ void wiiu_input_update(void) {
   VPADRead(VPAD_CHAN_0, &vpad, 1, &err);
   if (err == VPAD_READ_SUCCESS && !disable_gamepad) {
     if (!arrival_set) {
-      LiSendControllerArrivalEvent(0,gamepad_mask,LI_CTYPE_NINTENDO,0x1FFFFF,LI_CCAP_RUMBLE | LI_CCAP_GYRO | LI_CCAP_BATTERY_STATE | LI_CCAP_RGB_LED);
+      LiSendControllerArrivalEvent(0,gamepad_mask,LI_CTYPE_PS,0x1FFFFF,LI_CCAP_RUMBLE | LI_CCAP_GYRO | LI_CCAP_BATTERY_STATE);
       arrival_set = 1;
     }
     if (rumble_strong) {
-      VPADControlMotor(VPAD_CHAN_0, rumblepattern3, 8);
+      VPADControlMotor(VPAD_CHAN_0, rumblepattern1, 8);
     } else if (rumble_weak) {
-      VPADControlMotor(VPAD_CHAN_0, rumblepattern3, 10);
+      VPADControlMotor(VPAD_CHAN_0, rumblepattern2, 10);
     } else {
       VPADStopMotor(VPAD_CHAN_0);
     }
 
     batteryLevel = vpad.battery;
     if (batteryLevel != lastBatteryLevel) {
-      LiSendControllerBatteryEvent(0, LI_BATTERY_STATE_UNKNOWN, batteryLevel);
+      LiSendControllerBatteryEvent(0, LI_BATTERY_STATE_DISCHARGING, batteryLevel);
       lastBatteryLevel = batteryLevel;
     }
 
     uint32_t btns = vpad.hold;
-    short buttonFlags = 0;
+
+    btns = handleAdditionalKeys(btns);
+
+    int buttonFlags = 0;
 #define CHECKBTN(v, f) if (btns & v) buttonFlags |= f;
     if (swap_buttons) {
       CHECKBTN(VPAD_BUTTON_A,       B_FLAG);
@@ -222,13 +235,15 @@ void wiiu_input_update(void) {
     CHECKBTN(VPAD_BUTTON_PLUS,    PLAY_FLAG);
     CHECKBTN(VPAD_BUTTON_MINUS,   BACK_FLAG);
     CHECKBTN(VPAD_BUTTON_HOME,    SPECIAL_FLAG);
-    CHECKBTN(VPAD_BUTTON_TV,      MISC_FLAG);
+    CHECKBTN(VPAD_BUTTON_TV,      TOUCHPAD_FLAG);
+    //CHECKBTN(VPAD_BUTTON_POWER,   MISC_FLAG);
 #undef CHECKBTN
 
     // If the button was just pressed, reset to current time
     if (vpad.trigger & VPAD_BUTTON_HOME) home_pressed[controllerNumber] = millis();
 
-    if (btns & VPAD_BUTTON_HOME && millis() - home_pressed[controllerNumber] > 300) {
+    //Use a button combo instead of just the home button to stop the stream, since holding the home button is used for Steam chords, etc
+    if (btns & VPAD_BUTTON_POWER && btns & VPAD_BUTTON_TV) {
       state = STATE_STOP_STREAM;
       return;
     }
@@ -240,8 +255,9 @@ void wiiu_input_update(void) {
       vpad.rightStick.x * INT16_MAX, vpad.rightStick.y * INT16_MAX);
 
     VPADTouchData touch;
-    VPADGetTPCalibratedPoint(VPAD_CHAN_0, &touch, &vpad.tpNormal);
-    handleMotion(vpad.gyro, vpad.accelerometer);
+    VPADGetTPCalibratedPointEx(VPAD_CHAN_0, VPAD_TP_1920X1080, &touch, &vpad.tpNormal);
+    
+    handleMotion(vpad.gyro, vpad.accelorometer.acc);
     handleTouch(touch);
   }
 
@@ -252,7 +268,7 @@ void wiiu_input_update(void) {
 		if (kpad_err == KPAD_ERROR_OK && controllerNumber < 4) {
       if (kpad_data.extensionType == WPAD_EXT_PRO_CONTROLLER) {
         uint32_t btns = kpad_data.pro.hold;
-        short buttonFlags = 0;
+        int buttonFlags = 0;
 #define CHECKBTN(v, f) if (btns & v) buttonFlags |= f;
         if (swap_buttons) {
           CHECKBTN(WPAD_PRO_BUTTON_A,       B_FLAG);
@@ -296,7 +312,7 @@ void wiiu_input_update(void) {
       }
       else if (kpad_data.extensionType == WPAD_EXT_CLASSIC || kpad_data.extensionType == WPAD_EXT_MPLUS_CLASSIC) {
         uint32_t btns = kpad_data.classic.hold;
-        short buttonFlags = 0;
+        int buttonFlags = 0;
 #define CHECKBTN(v, f) if (btns & v) buttonFlags |= f;
         if (swap_buttons) {
           CHECKBTN(WPAD_CLASSIC_BUTTON_A,       B_FLAG);
@@ -436,7 +452,7 @@ static void alarm_callback(OSAlarm* alarm, OSContext* ctx)
 static int input_thread_proc(int argc, const char **argv)
 {
   OSCreateAlarm(&inputAlarm);
-  OSSetPeriodicAlarm(&inputAlarm, 0, INPUT_UPDATE_RATE, alarm_callback);
+  OSSetPeriodicAlarm(&inputAlarm, 0, OSMillisecondsToTicks(input_update_rate), alarm_callback);
 
   while (thread_running) {
     OSWaitAlarm(&inputAlarm);

@@ -34,6 +34,9 @@ extern int swap_buttons;
 extern int absolute_positioning;
 extern int touch_output;
 extern int gyro_output;
+extern int gyro_magnification;
+extern float input_update_rate;
+extern int power_button_key;
 extern int autostream;
 
 extern ssize_t getline(char **buf, size_t *bufsiz, FILE *fp);
@@ -88,6 +91,9 @@ static struct option long_options[] = {
   {"absolute_positioning", no_argument, NULL, 'D'},
   {"touch_output", no_argument, NULL, 'E'},
   {"gyro_output", no_argument, NULL, 'F'},
+  {"gyro_magnification", required_argument, NULL, 'G'},
+  {"power_button_key", required_argument, NULL, 'H'},
+  {"input_update_rate", required_argument, NULL, 'I'},
 #endif
   {"nomouseemulation", no_argument, NULL, '4'},
   {"pin", required_argument, NULL, '5'},
@@ -286,6 +292,15 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     break;
   case 'F':
     gyro_output = true;
+    break;
+  case 'G':
+    gyro_magnification = atoi(value);
+    break;
+  case 'H':
+    power_button_key = atoi(value);
+    break;
+  case 'I':
+    input_update_rate = atof(value);
     break;
 #endif
   case '4':

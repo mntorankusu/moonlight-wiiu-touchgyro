@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
 
 #ifdef DEBUG
   Debug_Init();
-  printf("Moonlight Wii U started\n");
+
 #endif
 
   WHBGfxInit();
