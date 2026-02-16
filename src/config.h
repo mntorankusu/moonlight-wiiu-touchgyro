@@ -25,6 +25,12 @@
 
 enum codecs { CODEC_UNSPECIFIED, CODEC_H264, CODEC_HEVC, CODEC_AV1 };
 
+typedef enum mouse_modes {
+  MOUSE_MODE_RELATIVE,
+  MOUSE_MODE_ABSOLUTE,
+  MOUSE_MODE_TOUCHSCREEN
+} mouse_modes;
+
 typedef struct _CONFIGURATION {
   STREAM_CONFIGURATION stream;
   int debug_level;

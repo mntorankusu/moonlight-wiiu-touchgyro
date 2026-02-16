@@ -1,3 +1,4 @@
+#include "../config.h"
 #include "wiiu.h"
 #include "Limelight.h"
 #include <nn/acp/drcled_c.h>
@@ -15,7 +16,7 @@
 
 int disable_gamepad = 0;
 int swap_buttons = 0;
-int absolute_positioning = 0;
+mouse_modes mouse_mode = MOUSE_MODE_RELATIVE;
 
 int touch_output = 0;
 int gyro_output = 0;
@@ -97,20 +98,7 @@ void handleMotion (VPADVec3D gyro, VPADVec3D accel) {
 }
 
 void handleTouch(VPADTouchData touch) {
-  if (touch_output) {
-    if (touch.touched && !touched){
-      touched = 1;
-      LiSendTouchEvent(LI_TOUCH_EVENT_DOWN, 22, (float)touch.x/TOUCH_WIDTH, (float)touch.y/TOUCH_HEIGHT, 0, 0, 0, 0);
-    }
-    else if(touch.touched && touched){
-      LiSendTouchEvent(LI_TOUCH_EVENT_MOVE, 22, (float)touch.x/TOUCH_WIDTH, (float)touch.y/TOUCH_HEIGHT, 0, 0, 0, 0);
-    }
-    else if(!touch.touched && touched){
-      touched = 0;
-      LiSendTouchEvent(LI_TOUCH_EVENT_UP, 22, (float)touch.x/TOUCH_WIDTH, (float)touch.y/TOUCH_HEIGHT, 0, 0, 0, 0);
-    }
-  }
-  else if (absolute_positioning) {
+  if (mouse_mode == MOUSE_MODE_ABSOLUTE) {
     if (touch.touched) {
       LiSendMousePositionEvent(touch.x, touch.y, TOUCH_WIDTH, TOUCH_HEIGHT);
 
@@ -121,6 +109,20 @@ void handleTouch(VPADTouchData touch) {
     }
     else if (touched) {
       LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+      touched = 0;
+    }
+  }
+  else if (mouse_mode == MOUSE_MODE_TOUCHSCREEN) {
+    if (touch.touched) {
+      if (!touched) {
+        LiSendTouchEvent(LI_TOUCH_EVENT_DOWN, 0, (float) touch.x / TOUCH_WIDTH, (float) touch.y / TOUCH_HEIGHT, 0.0, 0.0, 0.0, 0.0);
+        touched = 1;
+      } else {
+        LiSendTouchEvent(LI_TOUCH_EVENT_MOVE, 0, (float) touch.x / TOUCH_WIDTH, (float) touch.y / TOUCH_HEIGHT, 0.0, 0.0, 0.0, 0.0);
+      }
+    }
+    else if (touched) {
+      LiSendTouchEvent(LI_TOUCH_EVENT_UP, 0, (float) touch.x / TOUCH_WIDTH, (float) touch.y / TOUCH_HEIGHT, 0.0, 0.0, 0.0, 0.0);
       touched = 0;
     }
   }

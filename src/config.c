@@ -31,7 +31,7 @@
 #ifdef __WIIU__
 extern int disable_gamepad;
 extern int swap_buttons;
-extern int absolute_positioning;
+extern mouse_modes mouse_mode;
 extern int touch_output;
 extern int gyro_output;
 extern int gyro_magnification;
@@ -88,7 +88,7 @@ static struct option long_options[] = {
   {"disable_gamepad", no_argument, NULL, 'A'},
   {"swap_buttons", no_argument, NULL, 'B'},
   {"autostream", no_argument, NULL, 'C'},
-  {"absolute_positioning", no_argument, NULL, 'D'},
+  {"mouse_mode", required_argument, NULL, 'D'},
   {"touch_output", no_argument, NULL, 'E'},
   {"gyro_output", no_argument, NULL, 'F'},
   {"gyro_magnification", required_argument, NULL, 'G'},
@@ -285,7 +285,12 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     autostream = true;
     break;
   case 'D':
-    absolute_positioning = true;
+    if (strcasecmp(value, "relative") == 0)
+      mouse_mode = MOUSE_MODE_RELATIVE;
+    else if (strcasecmp(value, "absolute") == 0)
+      mouse_mode = MOUSE_MODE_ABSOLUTE;
+    else if (strcasecmp(value, "touchscreen") == 0)
+      mouse_mode = MOUSE_MODE_TOUCHSCREEN;
     break;
   case 'E':
     touch_output = true;
