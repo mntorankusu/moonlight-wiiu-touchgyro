@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <limits.h>
 #include <whb/log.h>
+#include <whb/log_cafe.h>
 #include <whb/log_udp.h>
 
 #ifdef __WIIU__
@@ -44,6 +45,7 @@ extern int vban_enable;
 extern int vban_samplerate;
 extern int vban_bitdepth;
 extern char* vban_ipaddress;
+extern char* vban_name;
 extern int vban_port;
 
 extern ssize_t getline(char **buf, size_t *bufsiz, FILE *fp);
@@ -96,16 +98,17 @@ static struct option long_options[] = {
   {"swap_buttons", no_argument, NULL, 'B'},
   {"autostream", no_argument, NULL, 'C'},
   {"mouse_mode", required_argument, NULL, 'D'},
-  {"mic_button_key", no_argument, NULL, 'E'},
+  {"mic_button_key", required_argument, NULL, 'E'},
   {"gyro_output", no_argument, NULL, 'F'},
-  {"gyro_magnification", no_argument, NULL, 'G'},
-  {"power_button_key", no_argument, NULL, 'H'},
-  {"input_update_rate", no_argument, NULL, 'I'},
-  {"vban_enable", no_argument, NULL, 'J'},
-  {"vban_samplerate", no_argument, NULL, 'K'},
-  {"vban_bitdepth", no_argument, NULL, 'L'},
-  {"vban_ipaddress", no_argument, NULL, 'M'},
-  {"vban_port", no_argument, NULL, 'N'},
+  {"gyro_magnification", required_argument, NULL, 'G'},
+  {"power_button_key", required_argument, NULL, 'H'},
+  {"input_update_rate", required_argument, NULL, 'I'},
+  {"vban_enable", no_argument, NULL, 'J'}, 
+  {"vban_samplerate", required_argument, NULL, 'K'},
+  {"vban_bitdepth", required_argument, NULL, 'L'},
+  {"vban_ipaddress", required_argument, NULL, 'M'},
+  {"vban_port", required_argument, NULL, 'N'},
+  {"vban_name", required_argument, NULL, 'O'},
 #endif
   {"nomouseemulation", no_argument, NULL, '4'},
   {"pin", required_argument, NULL, '5'},
@@ -309,7 +312,7 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     mic_button_key = atoi(value);
     break;
   case 'F':
-    gyro_output = true;
+    gyro_output = 1;
     break;
   case 'G':
     gyro_magnification = atoi(value);
@@ -321,7 +324,7 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     input_update_rate = atof(value);
     break;
   case 'J':
-    vban_enable = true;
+    vban_enable = 1;
     break;
   case 'K':
     if (strcmp(value, "16000") == 0) {
@@ -345,10 +348,13 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
     }
     break;
   case 'M':
-    vban_ipaddress = value;
+    vban_ipaddress = strdup(value);
     break;
   case 'N':
     vban_port = atoi(value);
+    break;
+  case 'O':
+    vban_name = strdup(value);
     break;
 
 #endif

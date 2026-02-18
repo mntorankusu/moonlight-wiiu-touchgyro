@@ -45,6 +45,7 @@
 #include <whb/log_cafe.h>
 #include <whb/log_udp.h>
 #include <vpad/input.h>
+#include "wiiu/mic.h"
 
 #ifdef DEBUG
 void Debug_Init();
@@ -368,6 +369,7 @@ int main(int argc, char* argv[]) {
           if (stream(client, &server, &config) == 0) {
             wiiu_proc_set_home_enabled(0);
             start_input_thread();
+            wiiu_mic_start();
             state = STATE_STREAMING;
             break;
           }
@@ -386,6 +388,7 @@ int main(int argc, char* argv[]) {
         break;
       }
       case STATE_STOP_STREAM: {
+        wiiu_mic_stop();
         stop_input_thread();
         LiStopConnection();
 
