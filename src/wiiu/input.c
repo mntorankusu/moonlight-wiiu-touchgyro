@@ -40,6 +40,8 @@ int vban_bitdepth = 0;
 char* vban_ipaddress = NULL;
 int vban_port = 6980;
 
+int use_8bit = 1;
+
 static char lastTouched = 0;
 static char touched = 0;
 static int rumble_weak = 0;
@@ -195,7 +197,7 @@ void handleMic() {
             (void *)(&audio_data[samples_sent]);
         
         uint32_t packet_size = vban_pack_audio(vban_packet, frame_data, 
-                                               samples_this_frame, 1, &vban_header, vban_bitdepth, vban_samplerate);
+                                               samples_this_frame, 1, &vban_header, use_8bit, 2);
         
         sendto(udp_socket, vban_packet, packet_size, 0,
                (struct sockaddr *)&server_addr, sizeof(server_addr));

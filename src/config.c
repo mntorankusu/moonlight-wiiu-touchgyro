@@ -27,17 +27,24 @@
 #include <pwd.h>
 #include <sys/types.h>
 #include <limits.h>
+#include <whb/log.h>
+#include <whb/log_udp.h>
 
 #ifdef __WIIU__
 extern int disable_gamepad;
 extern int swap_buttons;
 extern mouse_modes mouse_mode;
-extern int touch_output;
 extern int gyro_output;
 extern int gyro_magnification;
 extern float input_update_rate;
 extern int power_button_key;
+extern int mic_button_key;
 extern int autostream;
+extern int vban_enable;
+extern int vban_samplerate;
+extern int vban_bitdepth;
+extern char* vban_ipaddress;
+extern int vban_port;
 
 extern ssize_t getline(char **buf, size_t *bufsiz, FILE *fp);
 
@@ -89,11 +96,16 @@ static struct option long_options[] = {
   {"swap_buttons", no_argument, NULL, 'B'},
   {"autostream", no_argument, NULL, 'C'},
   {"mouse_mode", required_argument, NULL, 'D'},
-  {"touch_output", no_argument, NULL, 'E'},
+  {"mic_button_key", no_argument, NULL, 'E'},
   {"gyro_output", no_argument, NULL, 'F'},
-  {"gyro_magnification", required_argument, NULL, 'G'},
-  {"power_button_key", required_argument, NULL, 'H'},
-  {"input_update_rate", required_argument, NULL, 'I'},
+  {"gyro_magnification", no_argument, NULL, 'G'},
+  {"power_button_key", no_argument, NULL, 'H'},
+  {"input_update_rate", no_argument, NULL, 'I'},
+  {"vban_enable", no_argument, NULL, 'J'},
+  {"vban_samplerate", no_argument, NULL, 'K'},
+  {"vban_bitdepth", no_argument, NULL, 'L'},
+  {"vban_ipaddress", no_argument, NULL, 'M'},
+  {"vban_port", no_argument, NULL, 'N'},
 #endif
   {"nomouseemulation", no_argument, NULL, '4'},
   {"pin", required_argument, NULL, '5'},
@@ -156,6 +168,7 @@ char* get_path(char* name, char* extra_data_dirs) {
 #endif
 
 static void parse_argument(int c, char* value, PCONFIGURATION config) {
+  WHBLogPrintf("Parsing arguments");
   switch (c) {
   case 'a':
     config->stream.width = 1280;
@@ -293,7 +306,7 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
       mouse_mode = MOUSE_MODE_TOUCHSCREEN;
     break;
   case 'E':
-    touch_output = true;
+    mic_button_key = atoi(value);
     break;
   case 'F':
     gyro_output = true;
@@ -307,6 +320,37 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
   case 'I':
     input_update_rate = atof(value);
     break;
+  case 'J':
+    vban_enable = true;
+    break;
+  case 'K':
+    if (strcmp(value, "16000") == 0) {
+      vban_samplerate = 2;
+      WHBLogPrintf("VBAN samplerate set to 16000Hz");
+    } else if (strcmp(value, "8000") == 0) {
+      vban_samplerate = 4;
+      WHBLogPrintf("VBAN samplerate set to 8000Hz");
+    } else {
+      vban_samplerate = 1;
+      WHBLogPrintf("VBAN samplerate set to 32000Hz");
+    }
+    break;
+  case 'L':
+    if (strcmp(value, "8") == 0) {
+      vban_bitdepth = 1;
+      WHBLogPrintf("VBAN bitdepth set to 8-bit");
+    } else {
+      vban_bitdepth = 0;
+      WHBLogPrintf("VBAN bitdepth set to 16-bit");
+    }
+    break;
+  case 'M':
+    vban_ipaddress = value;
+    break;
+  case 'N':
+    vban_port = atoi(value);
+    break;
+
 #endif
   case '4':
     config->mouse_emulation = false;
@@ -323,9 +367,12 @@ static void parse_argument(int c, char* value, PCONFIGURATION config) {
   case 1:
     if (config->action == NULL)
       config->action = strdup(value);
-    else if (config->address == NULL)
+    else if (config->address == NULL) {
       config->address = strdup(value);
-    else {
+      if (!vban_ipaddress) {
+        vban_ipaddress = strdup(value);
+      }
+    } else {
       perror("Too many options");
       exit(-1);
     }
@@ -359,6 +406,9 @@ bool config_file_parse(char* filename, PCONFIGURATION config) {
 #endif
       if (strcmp(key, "address") == 0) {
         config->address = strdup(value);
+        if (!vban_ipaddress) {
+          vban_ipaddress = strdup(value);
+        }
       } else if (strcmp(key, "sops") == 0) {
         config->sops = strcmp("true", value) == 0;
       } else {

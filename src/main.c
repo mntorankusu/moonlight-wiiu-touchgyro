@@ -41,6 +41,9 @@
 
 #include "wiiu/wiiu.h"
 #include <whb/gfx.h>
+#include <whb/log.h>
+#include <whb/log_cafe.h>
+#include <whb/log_udp.h>
 #include <vpad/input.h>
 
 #ifdef DEBUG
@@ -130,14 +133,20 @@ int main(int argc, char* argv[]) {
   Debug_Init();
 
 #endif
-
+  
   WHBGfxInit();
+
+  
+
   wiiu_setup_renderstate();
 
   SDL_InitSubSystem(SDL_INIT_AUDIO);
 
   wiiu_net_init();
 
+  WHBLogCafeInit();
+  WHBLogUdpInit();
+  WHBLogPrint("Hello, World! Logging started.");
   wiiu_input_init();
   extern ConnListenerRumble rumble_handler;
 
