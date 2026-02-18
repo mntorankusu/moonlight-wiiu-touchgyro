@@ -5,12 +5,22 @@
 #include <malloc.h>
 #include <string.h>
 #include <vpad/input.h>
+#include "mic/mic.h"
 #include <padscore/kpad.h>
 #include <padscore/wpad.h>
 #include <coreinit/time.h>
 #include <coreinit/alarm.h>
 #include <coreinit/thread.h>
 #include <nn/act/client_cpp.h>
+#include <stdlib.h>
+#include <whb/log.h>
+#include <whb/log_cafe.h>
+#include <whb/log_udp.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include "../vban.h" 
 
 #define millis() OSTicksToMilliseconds(OSGetTime())
 
@@ -18,18 +28,35 @@ int disable_gamepad = 0;
 int swap_buttons = 0;
 mouse_modes mouse_mode = MOUSE_MODE_RELATIVE;
 
-int touch_output = 0;
 int gyro_output = 0;
 int gyro_magnification = 1;
-int power_button_key = 80;
-
-float input_update_rate = 32.0f;
+int power_button_key = 161; //p key = 80
+int mic_button_key = 163; //right control = 163
+int mic_threshold = 2000;
+float input_update_rate = 16.0f;
+int vban_enable = 0;
+int vban_samplerate = 1;
+int vban_bitdepth = 0;
+char* vban_ipaddress = NULL;
+int vban_port = 6980;
 
 static char lastTouched = 0;
 static char touched = 0;
 static int rumble_weak = 0;
 static int rumble_strong = 0;
 static uint32_t power_button_pressed = 0;
+static int mic_button_pressed = 0;
+
+MICHandle micHandle;
+MICError error;
+MICStatus micStatus;
+MICWorkMemory workMemory;
+int16_t *sampleBuffer;
+
+static VBAN_HEADER vban_header;
+static uint32_t frame_count = 0;
+static int udp_socket = -1;
+static struct sockaddr_in server_addr;
 
 uint8_t rumblepattern1[12] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 uint8_t rumblepattern2[12] = { 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -47,6 +74,14 @@ static uint64_t touchDownMillis = 0;
 #define TOUCH_HEIGHT 1080.0f
 #define VPAD_BUTTON_POWER 0x00080000
 
+#define SAMPLE_MAX_COUNT 0x2800
+#define SAMPLE_RATE 32000
+#define DOWNSAMPLE_16000 2
+#define DOWNSAMPLE_8000 4
+#define BIT_DEPTH_8 1
+#define BIT_DEPTH_16 0
+
+
 static int thread_running;
 static OSThread inputThread;
 static OSAlarm inputAlarm;
@@ -54,19 +89,147 @@ static OSAlarm inputAlarm;
 //Lower numbers mean lower latency, but there may be an impact on performance. 4ms is 250hz, so it's unlikely that any lower value will help much.
 #define INPUT_UPDATE_RATE OSMillisecondsToTicks(input_update_rate)
 
+void initializeMic() {
+  sampleBuffer = (int16_t *)memalign(0x40, SAMPLE_MAX_COUNT * sizeof(int16_t));
+  memset(sampleBuffer, 0, SAMPLE_MAX_COUNT * sizeof(int16_t));
+  workMemory.sampleMaxCount = SAMPLE_MAX_COUNT;
+  workMemory.sampleBuffer = sampleBuffer; 
+  micHandle = MICInit(MIC_INSTANCE_0, 0, &workMemory, &error);
+  error = MICOpen(micHandle);
+}
+
+int lastBufferPos = 0;
+
+void init_vban_sender(const char *server_ip, uint16_t server_port, 
+                      const char *stream_name, uint8_t num_channels) {
+    if (!server_ip || !stream_name) {
+        WHBLogPrintf("VBAN: Invalid parameters - NULL pointer");
+        return;
+    }
+    
+    // Initialize VBAN header with a default value (will be updated per packet)
+    vban_init_header(&vban_header, stream_name, num_channels, 1);
+    
+    // Setup UDP socket
+    udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp_socket < 0) {
+        WHBLogPrintf("VBAN: Failed to create UDP socket");
+        return;
+    }
+    
+    WHBLogPrintf("VBAN: UDP socket created successfully");
+    
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(server_port);
+    
+    // Use inet_pton instead of inet_aton for better error handling
+    int inet_result = inet_pton(AF_INET, server_ip, &server_addr.sin_addr);
+    if (inet_result <= 0) {
+        WHBLogPrintf("VBAN: inet_pton failed for IP: %s (result: %d)", server_ip, inet_result);
+        udp_socket = -1;
+        return;
+    }
+    
+    WHBLogPrintf("VBAN: Initialized sender - IP: %s, Port: %u, Stream: %s, Channels: %u", 
+                 server_ip, server_port, stream_name, num_channels);
+}
+
+void handleMic() {
+    error = MICGetStatus(micHandle, &micStatus);
+    
+    uint32_t sample_count = micStatus.availableData;
+    
+    if (sample_count == 0) {
+        return;
+    }
+    
+    int16_t *audio_data = malloc(sample_count * sizeof(int16_t));
+    if (!audio_data) {
+        return;
+    }
+    
+    for (uint32_t i = 0; i < sample_count; i++) {
+        int idx = (micStatus.bufferPos - sample_count + i + SAMPLE_MAX_COUNT) % SAMPLE_MAX_COUNT;
+        audio_data[i] = sampleBuffer[idx];
+    }
+    
+    uint8_t *audio_data_8bit = NULL;
+    if (vban_bitdepth == BIT_DEPTH_8) {
+        audio_data_8bit = malloc(sample_count * sizeof(uint8_t));
+        if (!audio_data_8bit) {
+            free(audio_data);
+            return;
+        }
+        
+        for (uint32_t i = 0; i < sample_count; i++) {
+          int16_t sample = audio_data[i];
+          audio_data_8bit[i] = (uint8_t)((sample + 32768) >> 8);
+        }
+    }
+
+    // Split into VBAN frames (max 256 samples per frame)
+    const uint32_t VBAN_MAX_SAMPLES = 256;
+    uint32_t samples_sent = 0;
+    
+    while (samples_sent < sample_count) {
+        uint32_t samples_this_frame = sample_count - samples_sent;
+        if (samples_this_frame > VBAN_MAX_SAMPLES) {
+            samples_this_frame = VBAN_MAX_SAMPLES;
+        }
+        
+        uint32_t bytes_per_sample = vban_bitdepth ? 1 : 2;
+        uint32_t packet_size_max = sizeof(VBAN_HEADER) + (samples_this_frame * bytes_per_sample);
+        uint8_t *vban_packet = malloc(packet_size_max);
+        if (!vban_packet) {
+            if (vban_bitdepth == BIT_DEPTH_8) {
+                free(audio_data_8bit);
+            }
+            free(audio_data);
+            return;
+        }
+        
+        // Get pointer to the audio data for this frame
+        void *frame_data = vban_bitdepth ? 
+            (void *)(&audio_data_8bit[samples_sent]) :
+            (void *)(&audio_data[samples_sent]);
+        
+        uint32_t packet_size = vban_pack_audio(vban_packet, frame_data, 
+                                               samples_this_frame, 1, &vban_header, vban_bitdepth, vban_samplerate);
+        
+        sendto(udp_socket, vban_packet, packet_size, 0,
+               (struct sockaddr *)&server_addr, sizeof(server_addr));
+        
+        vban_next_frame(&vban_header);
+        
+        samples_sent += samples_this_frame;
+        free(vban_packet);
+    }
+    
+    if (vban_bitdepth == BIT_DEPTH_8) {
+        free(audio_data_8bit);
+    }
+    free(audio_data);
+    error = MICSetDataConsumed(micHandle, sample_count);
+}
+
 uint32_t handleAdditionalKeys(uint32_t buttons) {
   static uint32_t status = 0;
   static uint32_t tick = 0;
   
-  VPADBASEGetPowerButtonPressStatus(VPAD_CHAN_0,&tick,&status);
-  if (status) {
-    buttons |= VPAD_BUTTON_POWER;
-    LiSendKeyboardEvent(power_button_key, KEY_ACTION_DOWN, 0);
-    power_button_pressed = 1;
-  } else if (!status) {
-    LiSendKeyboardEvent(power_button_key, KEY_ACTION_UP, 0);
-    power_button_pressed = 0;
-  }
+    VPADBASEGetPowerButtonPressStatus(VPAD_CHAN_0, &tick, &status);
+    if (status) {
+      buttons |= VPAD_BUTTON_POWER;
+      if (power_button_key != 0) {
+        LiSendKeyboardEvent(power_button_key, KEY_ACTION_DOWN, 0);
+      }
+      power_button_pressed = 1;
+    } else if (!status) {
+      if (power_button_key != 0) {
+        LiSendKeyboardEvent(power_button_key, KEY_ACTION_UP, 0);
+      }
+      power_button_pressed = 0;
+    }
 
   return buttons;
 }
@@ -249,7 +412,11 @@ void wiiu_input_update(void) {
       state = STATE_STOP_STREAM;
       return;
     }
-
+    if (btns & VPAD_BUTTON_A) {
+      char msg[100];
+      sprintf(msg, "%u", vpad.slideVolume);
+      WHBLogPrint(msg);
+    }
     LiSendMultiControllerEvent(controllerNumber++, gamepad_mask, buttonFlags,
       (vpad.hold & VPAD_BUTTON_ZL) ? 0xFF : 0,
       (vpad.hold & VPAD_BUTTON_ZR) ? 0xFF : 0,
@@ -261,6 +428,9 @@ void wiiu_input_update(void) {
     
     handleMotion(vpad.gyro, vpad.accelorometer.acc);
     handleTouch(touch);
+    if (mic_button_key != 0) {
+      handleMic();
+    }
   }
 
   KPADStatus kpad_data = {0};
@@ -468,6 +638,16 @@ static void thread_deallocator(OSThread *thread, void *stack)
 
 void start_input_thread(void)
 {
+  
+  if (vban_enable || mic_button_key != 0) {
+    initializeMic();
+    WHBLogPrintf("Initialized microphone");
+  }
+
+  if (vban_enable) { 
+    init_vban_sender(vban_ipaddress, vban_port, "WiiUMic", 1);
+    WHBLogPrintf("Initialized VBAN sender");
+  }
   const int stack_size = 4 * 1024 * 1024;
   uint8_t* stack = (uint8_t*)memalign(16, stack_size);
   if (!stack) {
@@ -494,6 +674,17 @@ void start_input_thread(void)
 void stop_input_thread(void)
 {
   thread_running = 0;
+
   OSCancelAlarm(&inputAlarm);
   OSJoinThread(&inputThread, NULL);
+
+  if (vban_enable || mic_button_key != 0) {
+    MICClose(micHandle);
+    MICUninit(micHandle);
+  }
+
+  if (vban_enable && udp_socket >= 0) {
+    close(udp_socket);
+    udp_socket = -1;
+  }
 }
